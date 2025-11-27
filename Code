@@ -1,0 +1,1142 @@
+################################################################################
+# SIMPLIFIED BINOMIAL LOGISTIC REGRESSION MODEL
+# Publication-Ready Analysis with High-Quality Visualizations
+################################################################################
+
+# Load Required Libraries
+required_packages <- c("caret", "pROC", "dplyr", "ggplot2", "gridExtra", 
+                       "RColorBrewer", "ResourceSelection", "boot", "nnet",
+                       "tidyr", "scales", "broom")
+
+for(pkg in required_packages) {
+  if(!require(pkg, character.only = TRUE)) {
+    install.packages(pkg)
+    library(pkg, character.only = TRUE)
+  }
+}
+
+################################################################################
+# SECTION 1: DATA PREPARATION
+################################################################################
+cat("\n=== SECTION 1: DATA PREPARATION ===\n")
+
+# Define variables
+outcome_vars <- c("Readmission", "Prolonged_Length_of_Stay")
+predictor_vars <- c( "Age","Gender", "Total_Cholesterol", "Albumin", 
+                     "Haemoglobin", "Serum_Creatinine", "HDL_C",
+                     "Systolic_Blood_Pressure")
+
+# Clean outcome variables - ensure binary 0/1
+for(outcome in outcome_vars) {
+  if(outcome %in% names(data)) {
+    cat("Processing outcome:", outcome, "\n")
+    
+    # Convert to binary if needed
+    if(is.factor(data[[outcome]]) || is.character(data[[outcome]])) {
+      # Convert "yes"/"no" or similar to 1/0
+      data[[outcome]] <- ifelse(tolower(as.character(data[[outcome]])) %in% c("yes", "1", "true"), 1, 0)
+    } else {
+      # Ensure numeric values are 0/1
+      data[[outcome]] <- ifelse(data[[outcome]] == 0, 0, 1)
+    }
+    
+    cat("  Class distribution:", table(data[[outcome]]), "\n")
+    cat("  Prevalence:", round(mean(data[[outcome]]), 3), "\n\n")
+  }
+}
+
+# Handle negative values in continuous predictors
+continuous_vars <- c( "Albumin", "Haemoglobin","Neutrophil_Lymphocyte_Ratio", "Haemoglobin",
+                      "Serum_Creatinine", "HDL_C", "Systolic_Blood_Pressure")
+
+for(var in continuous_vars) {
+  if(var %in% names(data)) {
+    # Replace negative values with NA (or handle as appropriate)
+    data[[var]] <- ifelse(data[[var]] < 0, NA, data[[var]])
+    
+    # Optional: Check if there are any negative values replaced
+    neg_count <- sum(data[[var]] < 0, na.rm = TRUE)
+    if(neg_count > 0) {
+      cat("Replaced", neg_count, "negative values with NA in", var, "\n")
+    }
+  }
+}
+
+# Handle Gender (convert to binary if needed)
+if("Gender" %in% names(data)) {
+  original_levels <- levels(as.factor(data$Gender))
+  if(is.character(data$Gender) || is.factor(data$Gender)) {
+    # Create binary: 0 for first level, 1 for second level
+    data$Gender <- as.numeric(as.factor(data$Gender)) - 1
+    cat("Converted Gender variable: Original levels were", paste(original_levels, collapse = ", "), "\n")
+  }
+}
+
+# Since you don't have missing data, we can skip the row removal step
+# But let's add a check to be safe
+available_predictors <- intersect(predictor_vars, names(data))
+
+# Check for missing values using base R approach
+missing_counts <- sapply(data[available_predictors], function(x) sum(is.na(x)))
+total_missing <- sum(missing_counts)
+
+cat("Original dataset:", nrow(data), "rows\n")
+cat("Total missing values across all predictors:", total_missing, "\n")
+
+if(total_missing == 0) {
+  cat("No missing data found - proceeding with original dataset\n")
+  data_clean <- data
+} else {
+  # Only if there are missing values, remove rows with >50% missing
+  missing_per_row <- rowSums(is.na(data[available_predictors])) / length(available_predictors)
+  data_clean <- data[missing_per_row < 0.5, ]
+  cat("After removing rows with >50% missing:", nrow(data_clean), "rows\n")
+}
+
+# Scale continuous predictors (standardization for better convergence)
+scaled_vars <- intersect(continuous_vars, names(data_clean))  # Only scale variables that exist
+for(var in scaled_vars) {
+  if(length(unique(data_clean[[var]][!is.na(data_clean[[var]])])) > 1) {  # Check if variable has variation
+    data_clean[[var]] <- as.numeric(scale(data_clean[[var]]))
+    cat("Scaled variable:", var, "\n")
+  } else {
+    cat("Skipped scaling for variable:", var, "(all values identical or all NA)\n")
+  }
+}
+
+# Handle negative values in continuous predictors
+continuous_vars <- c( "Albumin", "Haemoglobin","Neutrophil_Lymphocyte_Ratio", "Haemoglobin",
+                      "Serum_Creatinine", "HDL_C", "Systolic_Blood_Pressure")
+
+for(var in continuous_vars) {
+  if(var %in% names(data)) {
+    # Replace negative values with NA (or handle as appropriate)
+    data[[var]] <- ifelse(data[[var]] < 0, NA, data[[var]])
+    
+    # Optional: Check if there are any negative values replaced
+    neg_count <- sum(data[[var]] < 0, na.rm = TRUE)
+    if(neg_count > 0) {
+      cat("Replaced", neg_count, "negative values with NA in", var, "\n")
+    }
+  }
+}
+
+# Handle Gender (convert to binary if needed)
+if("Gender" %in% names(data)) {
+  original_levels <- levels(as.factor(data$Gender))
+  if(is.character(data$Gender) || is.factor(data$Gender)) {
+    # Create binary: 0 for first level, 1 for second level
+    data$Gender <- as.numeric(as.factor(data$Gender)) - 1
+    cat("Converted Gender variable: Original levels were", paste(original_levels, collapse = ", "), "\n")
+  }
+}
+
+# Since you don't have missing data, we can skip the row removal step
+# But let's add a check to be safe
+available_predictors <- intersect(predictor_vars, names(data))
+
+# Check for missing values using base R approach
+missing_counts <- sapply(data[available_predictors], function(x) sum(is.na(x)))
+total_missing <- sum(missing_counts)
+
+cat("Original dataset:", nrow(data), "rows\n")
+cat("Total missing values across all predictors:", total_missing, "\n")
+
+if(total_missing == 0) {
+  cat("No missing data found - proceeding with original dataset\n")
+  data_clean <- data
+} else {
+  # Only if there are missing values, remove rows with >50% missing
+  missing_per_row <- rowSums(is.na(data[available_predictors])) / length(available_predictors)
+  data_clean <- data[missing_per_row < 0.5, ]
+  cat("After removing rows with >50% missing:", nrow(data_clean), "rows\n")
+}
+
+# Scale continuous predictors (standardization for better convergence)
+scaled_vars <- intersect(continuous_vars, names(data_clean))  # Only scale variables that exist
+for(var in scaled_vars) {
+  if(length(unique(data_clean[[var]][!is.na(data_clean[[var]])])) > 1) {  # Check if variable has variation
+    data_clean[[var]] <- as.numeric(scale(data_clean[[var]]))
+    cat("Scaled variable:", var, "\n")
+  } else {
+    cat("Skipped scaling for variable:", var, "(all values identical or all NA)\n")
+  }
+}
+
+# Final summary
+cat("\nData preprocessing complete!\n")
+cat("Final dataset dimensions:", nrow(data_clean), "rows x", ncol(data_clean), "columns\n")
+cat("Available predictors:", paste(available_predictors, collapse = ", "), "\n")
+
+cat("\nData preparation completed!\n")
+cat("Predictors used:", paste(available_predictors, collapse = ", "), "\n")
+
+
+
+################################################################################
+# SECTION 2: TRAIN-TEST SPLIT (70-30 with Stratification)
+################################################################################
+cat("\n=== SECTION 2: TRAIN-TEST SPLIT ===\n")
+
+set.seed(123)
+split_data_list <- list()
+
+for(outcome in outcome_vars) {
+  if(outcome %in% names(data_clean)) {
+    cat("\nSplitting data for:", outcome, "\n")
+    
+    # Stratified split
+    train_index <- createDataPartition(data_clean[[outcome]], p = 0.7, list = FALSE)
+    train_data <- data_clean[train_index, ]
+    test_data <- data_clean[-train_index, ]
+    
+    cat("  Train set:", nrow(train_data), "rows\n")
+    cat("  Test set:", nrow(test_data), "rows\n")
+    cat("  Train prevalence:", round(mean(train_data[[outcome]]), 3), "\n")
+    cat("  Test prevalence:", round(mean(test_data[[outcome]]), 3), "\n")
+    
+    split_data_list[[outcome]] <- list(train = train_data, test = test_data)
+  }
+}
+
+################################################################################
+# SECTION 3: MODEL BUILDING AND EVALUATION
+################################################################################
+cat("\n=== SECTION 3: MODEL BUILDING ===\n")
+
+# Function to build and evaluate binomial logistic regression
+build_binomial_model <- function(train_data, test_data, outcome_var, predictors) {
+  
+  cat("\n", paste(rep("=", 70), collapse = ""), "\n")
+  cat("BUILDING MODEL FOR:", outcome_var, "\n")
+  cat(paste(rep("=", 70), collapse = ""), "\n\n")
+  
+  # Create formula
+  formula_str <- paste(outcome_var, "~", paste(predictors, collapse = " + "))
+  model_formula <- as.formula(formula_str)
+  
+  cat("Model formula:", formula_str, "\n\n")
+  
+  # Fit model
+  model <- glm(model_formula, data = train_data, family = binomial(link = "logit"))
+  
+  # Check convergence
+  if(!model$converged) {
+    warning("Model did not converge!")
+  }
+  
+  # Model summary
+  cat("MODEL SUMMARY:\n")
+  print(summary(model))
+  
+  # Calculate odds ratios with confidence intervals
+  cat("\n\nODDS RATIOS WITH 95% CI:\n")
+  coef_summary <- summary(model)$coefficients
+  or_df <- data.frame(
+    Variable = rownames(coef_summary),
+    Coefficient = coef_summary[, "Estimate"],
+    OR = exp(coef_summary[, "Estimate"]),
+    OR_Lower = exp(coef_summary[, "Estimate"] - 1.96 * coef_summary[, "Std. Error"]),
+    OR_Upper = exp(coef_summary[, "Estimate"] + 1.96 * coef_summary[, "Std. Error"]),
+    P_value = coef_summary[, "Pr(>|z|)"]
+  )
+  or_df$Significant <- ifelse(or_df$P_value < 0.05, "***", "")
+  print(or_df)
+  
+  # Predictions
+  train_pred_prob <- predict(model, train_data, type = "response")
+  test_pred_prob <- predict(model, test_data, type = "response")
+  
+  # Calculate performance metrics
+  train_metrics <- calculate_performance(train_data[[outcome_var]], train_pred_prob)
+  test_metrics <- calculate_performance(test_data[[outcome_var]], test_pred_prob)
+  
+  cat("\n\nPERFORMANCE METRICS:\n")
+  cat("Training Set:\n")
+  print_metrics(train_metrics)
+  cat("\nTest Set:\n")
+  print_metrics(test_metrics)
+  
+  # Hosmer-Lemeshow test (calibration)
+  hl_test <- hoslem.test(test_data[[outcome_var]], test_pred_prob, g = 10)
+  cat("\n\nHOSMER-LEMESHOW TEST (Calibration):\n")
+  cat("  Chi-square:", round(hl_test$statistic, 3), "\n")
+  cat("  P-value:", round(hl_test$p.value, 3), "\n")
+  cat("  Interpretation:", ifelse(hl_test$p.value > 0.05, 
+                                  "Good calibration (p > 0.05)", 
+                                  "Poor calibration (p <= 0.05)"), "\n")
+  
+  return(list(
+    model = model,
+    formula = model_formula,
+    or_table = or_df,
+    train_pred = train_pred_prob,
+    test_pred = test_pred_prob,
+    train_metrics = train_metrics,
+    test_metrics = test_metrics,
+    hl_test = hl_test
+  ))
+}
+
+# Helper function to calculate performance metrics
+calculate_performance <- function(actual, predicted_prob) {
+  
+  # ROC analysis
+  roc_obj <- roc(actual, predicted_prob, quiet = TRUE)
+  auc_val <- auc(roc_obj)
+  
+  # Manually calculate Youden's index to find optimal threshold
+  # Get all thresholds and their corresponding sensitivity/specificity
+  thresholds <- roc_obj$thresholds
+  sensitivities <- roc_obj$sensitivities
+  specificities <- roc_obj$specificities
+  
+  # Calculate Youden's J statistic (sensitivity + specificity - 1)
+  youden_j <- sensitivities + specificities - 1
+  optimal_idx <- which.max(youden_j)
+  optimal_threshold <- thresholds[optimal_idx]
+  
+  # Handle edge case where optimal threshold might be at boundary
+  if(is.na(optimal_threshold) || is.null(optimal_threshold) || optimal_threshold == -Inf) {
+    optimal_threshold <- 0.5
+  }
+  
+  # Predictions at optimal threshold
+  predicted_class <- ifelse(predicted_prob > optimal_threshold, 1, 0)
+  
+  # Confusion matrix elements
+  tp <- sum(predicted_class == 1 & actual == 1)
+  tn <- sum(predicted_class == 0 & actual == 0)
+  fp <- sum(predicted_class == 1 & actual == 0)
+  fn <- sum(predicted_class == 0 & actual == 1)
+  
+  # Calculate metrics
+  accuracy <- (tp + tn) / (tp + tn + fp + fn)
+  sensitivity <- tp / (tp + fn)
+  specificity <- tn / (tn + fp)
+  ppv <- tp / (tp + fp)
+  npv <- tn / (tn + fn)
+  
+  # Brier score
+  brier <- mean((predicted_prob - actual)^2)
+  
+  # Calculate confidence interval for AUC
+  ci_result <- ci.auc(roc_obj, method = "bootstrap", boot.n = 2000)
+  
+  return(list(
+    roc = roc_obj,
+    auc = as.numeric(auc_val),
+    auc_ci_lower = as.numeric(ci_result[1]),
+    auc_ci_upper = as.numeric(ci_result[3]),
+    optimal_threshold = optimal_threshold,
+    accuracy = accuracy,
+    sensitivity = sensitivity,
+    specificity = specificity,
+    ppv = ppv,
+    npv = npv,
+    brier = brier,
+    predicted_prob = predicted_prob,
+    predicted_class = predicted_class
+  ))
+}
+
+# Helper function to print metrics
+print_metrics <- function(metrics) {
+  cat("  AUC:", round(metrics$auc, 3), 
+      "(95% CI:", round(metrics$auc_ci_lower, 3), "-", 
+      round(metrics$auc_ci_upper, 3), ")\n")
+  cat("  Optimal Threshold:", round(metrics$optimal_threshold, 3), "\n")
+  cat("  Accuracy:", round(metrics$accuracy, 3), "\n")
+  cat("  Sensitivity:", round(metrics$sensitivity, 3), "\n")
+  cat("  Specificity:", round(metrics$specificity, 3), "\n")
+  cat("  PPV:", round(metrics$ppv, 3), "\n")
+  cat("  NPV:", round(metrics$npv, 3), "\n")
+  cat("  Brier Score:", round(metrics$brier, 4), "\n")
+}
+
+# Build models for each outcome
+model_results_list <- list()
+
+for(outcome in outcome_vars) {
+  if(outcome %in% names(data_clean)) {
+    current_split <- split_data_list[[outcome]]
+    
+    model_results <- build_binomial_model(
+      train_data = current_split$train,
+      test_data = current_split$test,
+      outcome_var = outcome,
+      predictors = available_predictors
+    )
+    
+    model_results_list[[outcome]] <- model_results
+  }
+}
+################################################################################
+# SECTION 4: HIGH-QUALITY VISUALIZATIONS
+################################################################################
+cat("\n=== SECTION 4: CREATING PUBLICATION-QUALITY VISUALIZATIONS ===\n")
+
+# Function to create ROC curve
+create_roc_plot <- function(metrics, outcome_name, dataset = "Test") {
+  
+  roc_data <- data.frame(
+    Specificity = 1 - metrics$roc$specificities,
+    Sensitivity = metrics$roc$sensitivities
+  )
+  
+  p <- ggplot(roc_data, aes(x = Specificity, y = Sensitivity)) +
+    geom_line(color = "#1F78B4", size = 1.5) +
+    geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray50") +
+    annotate("text", x = 0.7, y = 0.3, 
+             label = paste0("AUC = ", round(metrics$auc, 3), "\n",
+                            "95% CI: ", round(metrics$auc_ci_lower, 3), 
+                            "-", round(metrics$auc_ci_upper, 3)),
+             size = 5, fontface = "bold", color = "#2C3E50") +
+    scale_x_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.2)) +
+    scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.2)) +
+    labs(title = paste("ROC Curve -", outcome_name),
+         subtitle = paste(dataset, "Set Performance"),
+         x = "1 - Specificity (False Positive Rate)",
+         y = "Sensitivity (True Positive Rate)") +
+    theme_minimal() +
+    theme(
+      text = element_text(size = 14),
+      plot.title = element_text(size = 18, face = "bold", hjust = 0.5),
+      plot.subtitle = element_text(size = 14, hjust = 0.5),
+      axis.title = element_text(size = 14, face = "bold"),
+      axis.text = element_text(size = 12, color = "black"),
+      panel.grid.minor = element_blank(),
+      panel.grid.major = element_line(color = "gray90"),
+      panel.border = element_rect(color = "black", fill = NA, linewidth = 1),
+      aspect.ratio = 1
+    )
+  
+  return(p)
+}
+
+# Function to create calibration plot
+create_calibration_plot <- function(actual, predicted_prob, outcome_name, n_bins = 10) {
+  
+  # Create bins
+  cal_data <- data.frame(
+    predicted = predicted_prob,
+    observed = actual
+  )
+  
+  cal_data$bin <- cut(cal_data$predicted, 
+                      breaks = quantile(cal_data$predicted, 
+                                        probs = seq(0, 1, 1/n_bins)), 
+                      include.lowest = TRUE)
+  
+  # Calculate calibration statistics
+  cal_summary <- cal_data %>%
+    group_by(bin) %>%
+    summarise(
+      n = n(),
+      mean_predicted = mean(predicted),
+      mean_observed = mean(observed),
+      se = sqrt((mean_observed * (1 - mean_observed)) / n),
+      .groups = 'drop'
+    ) %>%
+    mutate(
+      lower_ci = pmax(0, mean_observed - 1.96 * se),
+      upper_ci = pmin(1, mean_observed + 1.96 * se)
+    ) %>%
+    filter(!is.na(mean_predicted))
+  
+  # Fit loess for smooth curve
+  loess_fit <- loess(observed ~ predicted, data = cal_data, span = 0.75)
+  smooth_data <- data.frame(
+    predicted = seq(min(cal_data$predicted), max(cal_data$predicted), length.out = 100)
+  )
+  smooth_data$observed <- predict(loess_fit, newdata = smooth_data)
+  
+  p <- ggplot() +
+    geom_point(data = cal_summary, 
+               aes(x = mean_predicted, y = mean_observed, size = n),
+               color = "#E31A1C", alpha = 0.7) +
+    geom_errorbar(data = cal_summary,
+                  aes(x = mean_predicted, ymin = lower_ci, ymax = upper_ci),
+                  width = 0.02, color = "#666666") +
+    geom_line(data = smooth_data,
+              aes(x = predicted, y = observed),
+              color = "#1F78B4", size = 1.2) +
+    geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray50") +
+    scale_x_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.2),
+                       labels = scales::percent_format(accuracy = 1)) +
+    scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.2),
+                       labels = scales::percent_format(accuracy = 1)) +
+    scale_size_continuous(name = "N patients", range = c(2, 8)) +
+    labs(title = paste("Calibration Plot -", outcome_name),
+         subtitle = "Test Set",
+         x = "Predicted Probability",
+         y = "Observed Proportion") +
+    theme_minimal() +
+    theme(
+      text = element_text(size = 14),
+      plot.title = element_text(size = 18, face = "bold", hjust = 0.5),
+      plot.subtitle = element_text(size = 14, hjust = 0.5),
+      axis.title = element_text(size = 14, face = "bold"),
+      axis.text = element_text(size = 12, color = "black"),
+      legend.position = "bottom",
+      panel.grid.minor = element_blank(),
+      panel.grid.major = element_line(color = "gray90"),
+      panel.border = element_rect(color = "black", fill = NA, linewidth = 1),
+      aspect.ratio = 1
+    )
+  
+  return(p)
+}
+
+# Function to create Decision Curve Analysis
+create_dca_plot <- function(actual, predicted_prob, outcome_name) {
+  
+  threshold_range <- seq(0, 0.99, by = 0.01)
+  
+  dca_data <- data.frame(
+    threshold = threshold_range,
+    net_benefit_model = NA,
+    net_benefit_all = NA,
+    net_benefit_none = 0
+  )
+  
+  for(i in 1:length(threshold_range)) {
+    threshold <- threshold_range[i]
+    
+    # Model strategy
+    predicted_positive <- predicted_prob >= threshold
+    tp <- sum(predicted_positive & actual == 1)
+    fp <- sum(predicted_positive & actual == 0)
+    
+    # Net benefit
+    nb_model <- (tp / length(actual)) - 
+      (fp / length(actual)) * (threshold / (1 - threshold))
+    
+    # Treat all strategy
+    nb_all <- (sum(actual) / length(actual)) - 
+      ((length(actual) - sum(actual)) / length(actual)) * (threshold / (1 - threshold))
+    
+    dca_data$net_benefit_model[i] <- nb_model
+    dca_data$net_benefit_all[i] <- nb_all
+  }
+  
+  # Reshape for plotting
+  dca_long <- dca_data %>%
+    pivot_longer(cols = starts_with("net_benefit"),
+                 names_to = "Strategy",
+                 values_to = "NetBenefit") %>%
+    mutate(Strategy = case_when(
+      Strategy == "net_benefit_model" ~ "Model",
+      Strategy == "net_benefit_all" ~ "Treat All",
+      Strategy == "net_benefit_none" ~ "Treat None"
+    ))
+  
+  p <- ggplot(dca_long, aes(x = threshold, y = NetBenefit, color = Strategy)) +
+    geom_line(size = 1.2) +
+    scale_color_manual(values = c("Model" = "#1F78B4", 
+                                  "Treat All" = "#33A02C", 
+                                  "Treat None" = "#E31A1C")) +
+    scale_x_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.1)) +
+    labs(title = paste("Decision Curve Analysis -", outcome_name),
+         subtitle = "Test Set",
+         x = "Threshold Probability",
+         y = "Net Benefit") +
+    theme_minimal() +
+    theme(
+      text = element_text(size = 14),
+      plot.title = element_text(size = 18, face = "bold", hjust = 0.5),
+      plot.subtitle = element_text(size = 14, hjust = 0.5),
+      axis.title = element_text(size = 14, face = "bold"),
+      axis.text = element_text(size = 12, color = "black"),
+      legend.position = "bottom",
+      legend.title = element_blank(),
+      legend.text = element_text(size = 12),
+      panel.grid.minor = element_blank(),
+      panel.grid.major = element_line(color = "gray90"),
+      panel.border = element_rect(color = "black", fill = NA, linewidth = 1)
+    )
+  
+  return(p)
+}
+
+# Function to create forest plot for odds ratios
+create_forest_plot <- function(or_table, outcome_name) {
+  
+  # Remove intercept
+  plot_data <- or_table %>%
+    filter(Variable != "(Intercept)") %>%
+    arrange(OR)
+  
+  p <- ggplot(plot_data, aes(x = reorder(Variable, OR), y = OR)) +
+    geom_point(size = 4, color = "#1F78B4") +
+    geom_errorbar(aes(ymin = OR_Lower, ymax = OR_Upper), 
+                  width = 0.3, color = "#1F78B4", size = 1) +
+    geom_hline(yintercept = 1, linetype = "dashed", color = "red", size = 1) +
+    coord_flip() +
+    scale_y_log10(breaks = c(0.1, 0.25, 0.5, 1, 2, 4, 8)) +
+    labs(title = paste("Odds Ratios with 95% CI -", outcome_name),
+         x = "Predictor Variable",
+         y = "Odds Ratio (log scale)") +
+    theme_minimal() +
+    theme(
+      text = element_text(size = 14),
+      plot.title = element_text(size = 18, face = "bold", hjust = 0.5),
+      axis.title = element_text(size = 14, face = "bold"),
+      axis.text = element_text(size = 12, color = "black"),
+      panel.grid.minor = element_blank(),
+      panel.grid.major.y = element_blank(),
+      panel.grid.major.x = element_line(color = "gray90"),
+      panel.border = element_rect(color = "black", fill = NA, linewidth = 1)
+    )
+  
+  return(p)
+}
+
+# Generate and save all plots for each outcome
+for(outcome in names(model_results_list)) {
+  
+  cat("\nGenerating visualizations for:", outcome, "\n")
+  
+  results <- model_results_list[[outcome]]
+  test_split <- split_data_list[[outcome]]$test
+  
+  # Create output directory
+  outcome_dir <- gsub(" ", "_", outcome)
+  if(!dir.exists(outcome_dir)) dir.create(outcome_dir)
+  
+  # 1. ROC Curve
+  roc_plot <- create_roc_plot(results$test_metrics, outcome, "Test")
+  ggsave(file.path(outcome_dir, "ROC_Curve.png"), roc_plot, 
+         width = 8, height = 8, dpi = 600, bg = "white")
+  
+  # 2. Calibration Plot
+  cal_plot <- create_calibration_plot(test_split[[outcome]], 
+                                      results$test_pred, outcome)
+  ggsave(file.path(outcome_dir, "Calibration_Plot.png"), cal_plot, 
+         width = 8, height = 8, dpi = 600, bg = "white")
+  
+  # 3. Decision Curve Analysis
+  dca_plot <- create_dca_plot(test_split[[outcome]], 
+                              results$test_pred, outcome)
+  ggsave(file.path(outcome_dir, "Decision_Curve_Analysis.png"), dca_plot, 
+         width = 10, height = 7, dpi = 600, bg = "white")
+  
+  # 4. Forest Plot
+  forest_plot <- create_forest_plot(results$or_table, outcome)
+  ggsave(file.path(outcome_dir, "Forest_Plot_OR.png"), forest_plot, 
+         width = 10, height = 8, dpi = 600, bg = "white")
+  
+  # 5. Performance metrics comparison
+  metrics_df <- data.frame(
+    Metric = c("AUC", "Accuracy", "Sensitivity", "Specificity", "PPV", "NPV"),
+    Train = c(results$train_metrics$auc, results$train_metrics$accuracy,
+              results$train_metrics$sensitivity, results$train_metrics$specificity,
+              results$train_metrics$ppv, results$train_metrics$npv),
+    Test = c(results$test_metrics$auc, results$test_metrics$accuracy,
+             results$test_metrics$sensitivity, results$test_metrics$specificity,
+             results$test_metrics$ppv, results$test_metrics$npv)
+  )
+  
+  metrics_long <- metrics_df %>%
+    pivot_longer(cols = c(Train, Test), names_to = "Dataset", values_to = "Value")
+  
+  perf_plot <- ggplot(metrics_long, aes(x = Metric, y = Value, fill = Dataset)) +
+    geom_col(position = position_dodge(width = 0.8), alpha = 0.8) +
+    geom_text(aes(label = round(Value, 3)), 
+              position = position_dodge(width = 0.8), vjust = -0.5, size = 4) +
+    scale_fill_manual(values = c("Train" = "#A6CEE3", "Test" = "#1F78B4")) +
+    scale_y_continuous(limits = c(0, 1.1), breaks = seq(0, 1, 0.2)) +
+    labs(title = paste("Performance Metrics Comparison -", outcome),
+         x = "Metric",
+         y = "Value") +
+    theme_minimal() +
+    theme(
+      text = element_text(size = 14),
+      plot.title = element_text(size = 18, face = "bold", hjust = 0.5),
+      axis.title = element_text(size = 14, face = "bold"),
+      axis.text = element_text(size = 12, color = "black"),
+      axis.text.x = element_text(angle = 45, hjust = 1),
+      legend.position = "bottom",
+      legend.title = element_blank(),
+      legend.text = element_text(size = 12),
+      panel.grid.minor = element_blank(),
+      panel.grid.major = element_line(color = "gray90")
+    )
+  
+  ggsave(file.path(outcome_dir, "Performance_Comparison.png"), perf_plot, 
+         width = 10, height = 7, dpi = 600, bg = "white")
+  
+  cat("  Plots saved in:", outcome_dir, "\n")
+}
+
+################################################################################
+# SECTION 5: CROSS-VALIDATION
+################################################################################
+cat("\n=== SECTION 5: 10-FOLD CROSS-VALIDATION ===\n")
+
+perform_cv <- function(data, outcome_var, predictors, k = 10) {
+  
+  cat("\nPerforming", k, "-fold CV for:", outcome_var, "\n")
+  
+  set.seed(123)
+  folds <- createFolds(data[[outcome_var]], k = k, list = TRUE, returnTrain = TRUE)
+  
+  cv_results <- data.frame(
+    Fold = 1:k,
+    AUC = NA,
+    Accuracy = NA,
+    Sensitivity = NA,
+    Specificity = NA,
+    Brier = NA
+  )
+  
+  formula_str <- paste(outcome_var, "~", paste(predictors, collapse = " + "))
+  
+  for(i in 1:k) {
+    train_fold <- data[folds[[i]], ]
+    test_fold <- data[-folds[[i]], ]
+    
+    # Fit model
+    model_fold <- glm(as.formula(formula_str), 
+                      data = train_fold, 
+                      family = binomial(link = "logit"))
+    
+    # Predictions
+    pred_prob <- predict(model_fold, test_fold, type = "response")
+    
+    # Metrics
+    roc_fold <- roc(test_fold[[outcome_var]], pred_prob, quiet = TRUE)
+    auc_fold <- auc(roc_fold)
+    
+    # Calculate optimal threshold using manual Youden's index calculation
+    thresholds_fold <- roc_fold$thresholds
+    sensitivities_fold <- roc_fold$sensitivities
+    specificities_fold <- roc_fold$specificities
+    
+    # Calculate Youden's J statistic (sensitivity + specificity - 1)
+    youden_j_fold <- sensitivities_fold + specificities_fold - 1
+    optimal_idx_fold <- which.max(youden_j_fold)
+    optimal_threshold_fold <- thresholds_fold[optimal_idx_fold]
+    
+    # Handle edge case where optimal threshold might be at boundary
+    if(is.na(optimal_threshold_fold) || is.null(optimal_threshold_fold) || optimal_threshold_fold == -Inf) {
+      optimal_threshold_fold <- 0.5
+    }
+    
+    pred_class <- ifelse(pred_prob > optimal_threshold_fold, 1, 0)
+    
+    tp <- sum(pred_class == 1 & test_fold[[outcome_var]] == 1)
+    tn <- sum(pred_class == 0 & test_fold[[outcome_var]] == 0)
+    fp <- sum(pred_class == 1 & test_fold[[outcome_var]] == 0)
+    fn <- sum(pred_class == 0 & test_fold[[outcome_var]] == 1)
+    
+    cv_results$AUC[i] <- as.numeric(auc_fold)
+    cv_results$Accuracy[i] <- (tp + tn) / (tp + tn + fp + fn)
+    cv_results$Sensitivity[i] <- tp / (tp + fn)
+    cv_results$Specificity[i] <- tn / (tn + fp)
+    cv_results$Brier[i] <- mean((pred_prob - test_fold[[outcome_var]])^2)
+  }
+  
+  # Summary statistics
+  cv_summary <- data.frame(
+    Metric = c("AUC", "Accuracy", "Sensitivity", "Specificity", "Brier"),
+    Mean = c(mean(cv_results$AUC), mean(cv_results$Accuracy),
+             mean(cv_results$Sensitivity), mean(cv_results$Specificity),
+             mean(cv_results$Brier)),
+    SD = c(sd(cv_results$AUC), sd(cv_results$Accuracy),
+           sd(cv_results$Sensitivity), sd(cv_results$Specificity),
+           sd(cv_results$Brier)),
+    Min = c(min(cv_results$AUC), min(cv_results$Accuracy),
+            min(cv_results$Sensitivity), min(cv_results$Specificity),
+            min(cv_results$Brier)),
+    Max = c(max(cv_results$AUC), max(cv_results$Accuracy),
+            max(cv_results$Sensitivity), max(cv_results$Specificity),
+            max(cv_results$Brier))
+  )
+  
+  cat("\nCross-Validation Summary:\n")
+  print(cv_summary)
+  
+  return(list(
+    fold_results = cv_results,
+    summary = cv_summary
+  ))
+}
+
+# Perform CV for each outcome
+cv_results_list <- list()
+
+for(outcome in outcome_vars) {
+  if(outcome %in% names(data_clean)) {
+    cv_results_list[[outcome]] <- perform_cv(data_clean, outcome, available_predictors, k = 10)
+  }
+}
+################################################################################
+# SECTION 6: BOOTSTRAP VALIDATION
+################################################################################
+cat("\n=== SECTION 6: BOOTSTRAP VALIDATION ===\n")
+
+perform_bootstrap <- function(data, outcome_var, predictors, n_boot = 1000) {
+  
+  cat("\nPerforming", n_boot, "bootstrap iterations for:", outcome_var, "\n")
+  
+  set.seed(123)
+  
+  boot_auc_apparent <- numeric(n_boot)
+  boot_auc_test <- numeric(n_boot)
+  boot_optimism <- numeric(n_boot)
+  
+  formula_str <- paste(outcome_var, "~", paste(predictors, collapse = " + "))
+  
+  for(i in 1:n_boot) {
+    if(i %% 100 == 0) cat("  Bootstrap iteration", i, "\n")
+    
+    # Bootstrap sample
+    boot_indices <- sample(1:nrow(data), replace = TRUE)
+    boot_sample <- data[boot_indices, ]
+    oob_sample <- data[-unique(boot_indices), ]
+    
+    # Skip if OOB sample is too small
+    if(nrow(oob_sample) < 30) {
+      boot_auc_apparent[i] <- NA
+      boot_auc_test[i] <- NA
+      boot_optimism[i] <- NA
+      next
+    }
+    
+    tryCatch({
+      # Fit model on bootstrap sample
+      model_boot <- glm(as.formula(formula_str), 
+                        data = boot_sample, 
+                        family = binomial(link = "logit"))
+      
+      # Check convergence
+      if(!model_boot$converged) {
+        boot_auc_apparent[i] <- NA
+        boot_auc_test[i] <- NA
+        boot_optimism[i] <- NA
+        next
+      }
+      
+      # Apparent performance (on bootstrap sample)
+      pred_apparent <- predict(model_boot, boot_sample, type = "response")
+      if(length(unique(boot_sample[[outcome_var]])) < 2) {
+        boot_auc_apparent[i] <- NA
+        boot_auc_test[i] <- NA
+        boot_optimism[i] <- NA
+        next
+      }
+      roc_apparent <- roc(boot_sample[[outcome_var]], pred_apparent, quiet = TRUE)
+      boot_auc_apparent[i] <- as.numeric(auc(roc_apparent))
+      
+      # Test performance (on OOB sample)
+      pred_test <- predict(model_boot, oob_sample, type = "response")
+      if(length(unique(oob_sample[[outcome_var]])) < 2) {
+        boot_auc_test[i] <- NA
+        boot_optimism[i] <- NA
+        next
+      }
+      roc_test <- roc(oob_sample[[outcome_var]], pred_test, quiet = TRUE)
+      boot_auc_test[i] <- as.numeric(auc(roc_test))
+      
+      # Optimism
+      boot_optimism[i] <- boot_auc_apparent[i] - boot_auc_test[i]
+      
+    }, error = function(e) {
+      boot_auc_apparent[i] <- NA
+      boot_auc_test[i] <- NA
+      boot_optimism[i] <- NA
+    })
+  }
+  
+  # Remove NAs
+  valid_idx <- !is.na(boot_auc_apparent) & !is.na(boot_auc_test)
+  
+  # Calculate statistics
+  mean_apparent <- mean(boot_auc_apparent[valid_idx])
+  mean_test <- mean(boot_auc_test[valid_idx])
+  mean_optimism <- mean(boot_optimism[valid_idx])
+  
+  # Fit final model on full data
+  final_model <- glm(as.formula(formula_str), data = data, family = binomial(link = "logit"))
+  final_pred <- predict(final_model, data, type = "response")
+  final_roc <- roc(data[[outcome_var]], final_pred, quiet = TRUE)
+  final_auc <- as.numeric(auc(final_roc))
+  
+  # Optimism-corrected AUC
+  corrected_auc <- final_auc - mean_optimism
+  
+  cat("\nBootstrap Results:\n")
+  cat("  Number of valid iterations:", sum(valid_idx), "out of", n_boot, "\n")
+  cat("  Mean Apparent AUC:", round(mean_apparent, 3), "\n")
+  cat("  Mean Test AUC:", round(mean_test, 3), "\n")
+  cat("  Mean Optimism:", round(mean_optimism, 3), "\n")
+  cat("  Original Model AUC:", round(final_auc, 3), "\n")
+  cat("  Optimism-Corrected AUC:", round(corrected_auc, 3), "\n")
+  
+  # Create bootstrap plots
+  boot_data <- data.frame(
+    Apparent = boot_auc_apparent[valid_idx],
+    Test = boot_auc_test[valid_idx],
+    Optimism = boot_optimism[valid_idx]
+  )
+  
+  # Histogram of optimism
+  p1 <- ggplot(boot_data, aes(x = Optimism)) +
+    geom_histogram(bins = 30, fill = "#1F78B4", color = "black", alpha = 0.7) +
+    geom_vline(xintercept = mean_optimism, color = "red", linetype = "dashed", size = 1) +
+    labs(title = paste("Bootstrap Optimism Distribution -", outcome_var),
+         x = "Optimism (Apparent AUC - Test AUC)",
+         y = "Frequency") +
+    theme_minimal() +
+    theme(
+      text = element_text(size = 14),
+      plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+      axis.title = element_text(size = 12, face = "bold"),
+      axis.text = element_text(size = 11, color = "black")
+    )
+  
+  # Scatter plot
+  p2 <- ggplot(boot_data, aes(x = Apparent, y = Test)) +
+    geom_point(alpha = 0.4, color = "#1F78B4") +
+    geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red") +
+    geom_smooth(method = "lm", se = TRUE, color = "darkgreen") +
+    labs(title = paste("Apparent vs Test AUC -", outcome_var),
+         x = "Apparent AUC",
+         y = "Test AUC") +
+    theme_minimal() +
+    theme(
+      text = element_text(size = 14),
+      plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+      axis.title = element_text(size = 12, face = "bold"),
+      axis.text = element_text(size = 11, color = "black")
+    )
+  
+  return(list(
+    boot_data = boot_data,
+    mean_apparent = mean_apparent,
+    mean_test = mean_test,
+    mean_optimism = mean_optimism,
+    final_auc = final_auc,
+    corrected_auc = corrected_auc,
+    plot_optimism = p1,
+    plot_scatter = p2
+  ))
+}
+
+# Perform bootstrap for each outcome
+bootstrap_results_list <- list()
+
+for(outcome in outcome_vars) {
+  if(outcome %in% names(data_clean)) {
+    bootstrap_results <- perform_bootstrap(data_clean, outcome, 
+                                           available_predictors, n_boot = 1000)
+    bootstrap_results_list[[outcome]] <- bootstrap_results
+    
+    # Save bootstrap plots
+    outcome_dir <- gsub(" ", "_", outcome)
+    if(!dir.exists(outcome_dir)) dir.create(outcome_dir)
+    
+    ggsave(file.path(outcome_dir, "Bootstrap_Optimism.png"), 
+           bootstrap_results$plot_optimism, 
+           width = 8, height = 6, dpi = 600, bg = "white")
+    
+    ggsave(file.path(outcome_dir, "Bootstrap_Scatter.png"), 
+           bootstrap_results$plot_scatter, 
+           width = 8, height = 6, dpi = 600, bg = "white")
+  }
+}
+
+################################################################################
+# SECTION 7: FINAL SUMMARY AND EXPORT RESULTS
+################################################################################
+cat("\n=== SECTION 7: FINAL SUMMARY ===\n")
+
+# Create comprehensive summary table
+summary_table <- data.frame()
+
+for(outcome in outcome_vars) {
+  if(outcome %in% names(model_results_list)) {
+    
+    results <- model_results_list[[outcome]]
+    cv_results <- cv_results_list[[outcome]]
+    boot_results <- bootstrap_results_list[[outcome]]
+    
+    summary_row <- data.frame(
+      Outcome = outcome,
+      N_Total = nrow(data_clean),
+      N_Events = sum(data_clean[[outcome]]),
+      Prevalence = round(mean(data_clean[[outcome]]), 3),
+      
+      # Test Set Performance
+      Test_AUC = round(results$test_metrics$auc, 3),
+      Test_AUC_CI = paste0("(", round(results$test_metrics$auc_ci_lower, 3), 
+                           "-", round(results$test_metrics$auc_ci_upper, 3), ")"),
+      Test_Accuracy = round(results$test_metrics$accuracy, 3),
+      Test_Sensitivity = round(results$test_metrics$sensitivity, 3),
+      Test_Specificity = round(results$test_metrics$specificity, 3),
+      Test_PPV = round(results$test_metrics$ppv, 3),
+      Test_NPV = round(results$test_metrics$npv, 3),
+      Test_Brier = round(results$test_metrics$brier, 4),
+      
+      # Cross-Validation Performance
+      CV_AUC_Mean = round(cv_results$summary$Mean[1], 3),
+      CV_AUC_SD = round(cv_results$summary$SD[1], 3),
+      
+      # Bootstrap Results
+      Bootstrap_Optimism = round(boot_results$mean_optimism, 3),
+      Bootstrap_Corrected_AUC = round(boot_results$corrected_auc, 3),
+      
+      # Calibration
+      HL_Test_Pvalue = round(results$hl_test$p.value, 3),
+      HL_Calibration = ifelse(results$hl_test$p.value > 0.05, "Good", "Poor")
+    )
+    
+    summary_table <- rbind(summary_table, summary_row)
+  }
+}
+
+cat("\n=== COMPREHENSIVE MODEL SUMMARY ===\n")
+print(summary_table)
+
+# Export summary table
+write.csv(summary_table, "Model_Summary_Table.csv", row.names = FALSE)
+cat("\nSummary table saved to: Model_Summary_Table.csv\n")
+
+# Export odds ratios for each outcome
+for(outcome in names(model_results_list)) {
+  results <- model_results_list[[outcome]]
+  outcome_clean <- gsub(" ", "_", outcome)
+  
+  write.csv(results$or_table, 
+            paste0(outcome_clean, "_Odds_Ratios.csv"), 
+            row.names = FALSE)
+}
+
+cat("\nOdds ratio tables saved for each outcome\n")
+
+# Export CV results
+for(outcome in names(cv_results_list)) {
+  cv_res <- cv_results_list[[outcome]]
+  outcome_clean <- gsub(" ", "_", outcome)
+  
+  write.csv(cv_res$fold_results, 
+            paste0(outcome_clean, "_CV_Fold_Results.csv"), 
+            row.names = FALSE)
+  
+  write.csv(cv_res$summary, 
+            paste0(outcome_clean, "_CV_Summary.csv"), 
+            row.names = FALSE)
+}
+
+cat("\nCross-validation results saved for each outcome\n")
+
+################################################################################
+# SECTION 8: MODEL COMPARISON AND INTERPRETATION
+################################################################################
+cat("\n=== SECTION 8: CLINICAL INTERPRETATION ===\n")
+
+for(outcome in names(model_results_list)) {
+  
+  cat("\n", paste(rep("=", 70), collapse = ""), "\n")
+  cat("CLINICAL INTERPRETATION FOR:", outcome, "\n")
+  cat(paste(rep("=", 70), collapse = ""), "\n\n")
+  
+  results <- model_results_list[[outcome]]
+  
+  # Model equation
+  cat("LOGISTIC REGRESSION EQUATION:\n")
+  coefs <- coef(results$model)
+  cat("log(odds) = ", round(coefs[1], 3))
+  for(i in 2:length(coefs)) {
+    cat(" + ", round(coefs[i], 3), " * ", names(coefs)[i], sep = "")
+  }
+  cat("\n\n")
+  
+  # Significant predictors
+  sig_predictors <- results$or_table %>%
+    filter(P_value < 0.05, Variable != "(Intercept)") %>%
+    arrange(P_value)
+  
+  if(nrow(sig_predictors) > 0) {
+    cat("SIGNIFICANT PREDICTORS (p < 0.05):\n")
+    for(i in 1:nrow(sig_predictors)) {
+      pred <- sig_predictors[i, ]
+      cat("  -", pred$Variable, "\n")
+      cat("    OR =", round(pred$OR, 3), 
+          "(95% CI:", round(pred$OR_Lower, 3), "-", round(pred$OR_Upper, 3), ")\n")
+      cat("    p-value:", format.pval(pred$P_value, digits = 3), "\n")
+      
+      # Interpretation
+      if(pred$OR > 1) {
+        cat("    Interpretation: Each unit increase associated with", 
+            round((pred$OR - 1) * 100, 1), "% increase in odds\n")
+      } else {
+        cat("    Interpretation: Each unit increase associated with", 
+            round((1 - pred$OR) * 100, 1), "% decrease in odds\n")
+      }
+      cat("\n")
+    }
+  } else {
+    cat("No significant predictors found at p < 0.05\n")
+  }
+  
+  # Model performance interpretation
+  cat("\nMODEL PERFORMANCE INTERPRETATION:\n")
+  test_auc <- results$test_metrics$auc
+  
+  cat("  Discrimination (AUC =", round(test_auc, 3), "):", 
+      ifelse(test_auc >= 0.9, "Excellent",
+             ifelse(test_auc >= 0.8, "Good",
+                    ifelse(test_auc >= 0.7, "Acceptable",
+                           ifelse(test_auc >= 0.6, "Poor", "Very Poor")))), "\n")
+  
+  cat("  Calibration (Hosmer-Lemeshow p =", round(results$hl_test$p.value, 3), "):", 
+      ifelse(results$hl_test$p.value > 0.05, "Good", "Poor"), "\n")
+  
+  # Clinical utility
+  cat("\nCLINICAL UTILITY:\n")
+  cat("  Sensitivity:", round(results$test_metrics$sensitivity, 3), 
+      "- Model correctly identifies", 
+      round(results$test_metrics$sensitivity * 100, 1), 
+      "% of true positive cases\n")
+  
+  cat("  Specificity:", round(results$test_metrics$specificity, 3), 
+      "- Model correctly identifies", 
+      round(results$test_metrics$specificity * 100, 1), 
+      "% of true negative cases\n")
+  
+  cat("  PPV:", round(results$test_metrics$ppv, 3), 
+      "- When model predicts positive,", 
+      round(results$test_metrics$ppv * 100, 1), 
+      "% probability of being correct\n")
+  
+  cat("  NPV:", round(results$test_metrics$npv, 3), 
+      "- When model predicts negative,", 
+      round(results$test_metrics$npv * 100, 1), 
+      "% probability of being correct\n")
+}
+
+################################################################################
+# SECTION 9: SAVE MODELS
+################################################################################
+cat("\n=== SECTION 9: SAVING MODELS ===\n")
+
+for(outcome in names(model_results_list)) {
+  results <- model_results_list[[outcome]]
+  outcome_clean <- gsub(" ", "_", outcome)
+  
+  # Save model object
+  saveRDS(results$model, paste0(outcome_clean, "_Model.rds"))
+  cat("Model saved:", paste0(outcome_clean, "_Model.rds"), "\n")
+}
+
+cat("\n=== ANALYSIS COMPLETE ===\n")
+cat("All results, plots, and models have been saved.\n")
+cat("\nFiles generated:\n")
+cat("  - Model_Summary_Table.csv: Comprehensive performance metrics\n")
+cat("  - [Outcome]_Odds_Ratios.csv: Odds ratios for each predictor\n")
+cat("  - [Outcome]_CV_*.csv: Cross-validation results\n")
+cat("  - [Outcome]_Model.rds: Saved model objects\n")
+cat("  - [Outcome]/ folders: All visualizations (ROC, Calibration, DCA, etc.)\n")
+cat("\nPlots are high-resolution (600 DPI) and publication-ready.\n")
